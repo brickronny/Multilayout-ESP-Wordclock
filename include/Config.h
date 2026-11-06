@@ -31,7 +31,7 @@
 // frame's current is estimated from its colour values; a frame above the limit
 // is dimmed as a whole, colours keep their ratios. Leave headroom for the
 // controller, e.g. 4000 on a 5 A supply.
-#define POWER_LIMIT_MILLIAMPS 0
+#define POWER_LIMIT_MILLIAMPS 4000
 // Current of one LED channel (R, G, B or W) at full brightness, in mA.
 #define POWER_LIMIT_MILLIAMPS_PER_CHANNEL 20
 
