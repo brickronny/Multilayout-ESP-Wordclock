@@ -4,6 +4,7 @@
 #include "NeoMultiFeature.hpp"
 #include "OpenWeatherMap.h"
 #include "SensitiveData.h"
+#include "TextFont.h"
 #include "Transitions/Transition.h"
 #include "WordClockState.h"
 #include "WordClockTypes/ClockType.hpp"
@@ -655,9 +656,13 @@ void ClockWork::displayStaticScrollingText(const char *buf,
 
 //------------------------------------------------------------------------------
 
-void ClockWork::scrollingText(const char *buf) {
+void ClockWork::scrollingText(const char *utf8) {
     static uint8_t i = 0, ii = 0;
     StaticScrollingText staticText;
+
+    // The text is stored as UTF-8; the font is indexed by CP437 glyphs.
+    char buf[sizeof(G.scrollingText)];
+    textfont::toFont(utf8, buf, sizeof(buf));
 
     if (getStaticScrollingTextInfo(buf, staticText)) {
         i = 0;
