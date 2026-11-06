@@ -6,6 +6,7 @@
 #include "OpenWeatherMap.h"
 #include "SensitiveData.h"
 #include "TextFont.h"
+#include "TextOverlay.h"
 #include "TimerOverlay.h"
 #include "Transitions/Transition.h"
 #include "WordClockState.h"
@@ -1525,6 +1526,31 @@ bool ClockWork::renderImageOverlay() {
 
 //------------------------------------------------------------------------------
 
+bool ClockWork::renderTextOverlay() {
+    static RgbColor frame[MAX_ROW_SIZE * MAX_COL_SIZE];
+
+    if (!textOverlay.active()) {
+        return false;
+    }
+    bool changed = false;
+    if (!textOverlay.update(millis(), frame, changed)) {
+        handDisplayBack();
+        if (mqttInstance) {
+            mqttInstance->publishTextState();
+        }
+        return false;
+    }
+    if (changed) {
+        // Colour and brightness were set when the text was started.
+        const uint16_t cells =
+            usedClockType->rowsWordMatrix() * usedClockType->colsWordMatrix();
+        drawOverlayFrame(frame, cells, cells, 1.f);
+    }
+    return true;
+}
+
+//------------------------------------------------------------------------------
+
 bool ClockWork::renderTimerOverlay() {
     static RgbColor frame[timer::PIXELS];
 
@@ -2055,8 +2081,9 @@ void ClockWork::loop(struct tm &tm) {
 
     broadcastWebState();
 
-    // A picture or animation from image/set owns the display until it ends.
-    if (renderImageOverlay() || renderTimerOverlay()) {
+    // A picture, animation or message from MQTT owns the display until it
+    // ends; a running timer comes back afterwards.
+    if (renderImageOverlay() || renderTextOverlay() || renderTimerOverlay()) {
         return;
     }
 

@@ -21,6 +21,7 @@ private:
     static void publishImageResult(const char *error);
     void publishImageInfo();
     static void processTimer(const char *msg);
+    static void processText(const byte *payload, unsigned int length);
     static const char *getEffectName();
 
 public:
@@ -33,6 +34,7 @@ public:
     void sendDiscovery();
     void publishImageState();
     void publishTimerState();
+    void publishTextState();
 
     bool isConnected();
     const char *status();
