@@ -50,7 +50,7 @@ private:
     bool getStaticScrollingTextInfo(const char *buf, StaticScrollingText &info);
     void displayStaticScrollingText(const char *buf,
                                     const StaticScrollingText &info);
-    void scrollingText(const char *buf);
+    void scrollingText(const char *utf8);
     void displaySymbols(BitmapSymbol bitmapSymbolnum);
     void countdownToMidnight();
 
