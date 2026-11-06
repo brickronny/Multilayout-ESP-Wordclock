@@ -4,6 +4,7 @@
 #include "Font.h"
 #include "LedStripInterface.h"
 #include "NeoMultiFeature.hpp"
+#include "RgbwConversion.h"
 #include "Symbols.h"
 #include "WordClockState.h"
 #include "WordClockTypes/ClockType.hpp"
@@ -19,36 +20,6 @@ extern Led led;
 extern RenderPipeline renderPipeline;
 extern LedStripInterface *activeLedStrip;
 
-namespace {
-const uint8_t whiteAdjR[3] = {255, 255, 255};
-const uint8_t whiteAdjG[3] = {180, 215, 107};
-const uint8_t whiteAdjB[3] = {107, 177, 253};
-
-RgbwColor convertRgbToRgbw(RgbColor light, WhiteType wType) {
-    RgbwColor returnColor;
-    uint8_t wIdx = static_cast<uint8_t>(wType);
-
-    // Use fast 32-bit integer math! (255 * 255 = 65025, easily fits in
-    // uint32_t)
-    uint32_t whiteValueR = (light.R * 255) / whiteAdjR[wIdx];
-    uint32_t whiteValueG = (light.G * 255) / whiteAdjG[wIdx];
-    uint32_t whiteValueB = (light.B * 255) / whiteAdjB[wIdx];
-
-    // Find the minimum using integer comparison
-    uint32_t minValW = min(whiteValueR, min(whiteValueG, whiteValueB));
-    returnColor.W = (minValW <= 255 ? (uint8_t)minValW : 255);
-
-    // Integer math for the return channels
-    returnColor.R =
-        static_cast<uint8_t>(light.R - (minValW * whiteAdjR[wIdx]) / 255);
-    returnColor.G =
-        static_cast<uint8_t>(light.G - (minValW * whiteAdjG[wIdx]) / 255);
-    returnColor.B =
-        static_cast<uint8_t>(light.B - (minValW * whiteAdjB[wIdx]) / 255);
-
-    return returnColor;
-}
-} // namespace
 
 //------------------------------------------------------------------------------
 // Helper Functions
@@ -260,7 +231,8 @@ void Led::setState(const bool newState) {
 void Led::setPixel(uint16_t ledIndex, HsbColor color) {
     if (G.Colortype == Grbw) {
         activeLedStrip->setRgbwPixel(
-            ledIndex, convertRgbToRgbw(RgbColor(color), G.wType));
+            ledIndex,
+            rgbw::convert(RgbColor(color), G.wType, RGBW_MAXIMIZE_OUTPUT));
     } else {
         activeLedStrip->setRgbPixel(ledIndex, color);
     }
