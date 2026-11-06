@@ -233,7 +233,7 @@
 // RGBW strips only: scale tints the white LED covers (e.g. warm whites on a
 // warm white strip) up to full output, same colour. More light at the cost of
 // more current - consider POWER_LIMIT_MILLIAMPS.
-#define RGBW_MAXIMIZE_OUTPUT false
+#define RGBW_MAXIMIZE_OUTPUT true
 #define DEFAULT_HUE 120
 #define DEFAULT_BRIGHTNESS 100
 
