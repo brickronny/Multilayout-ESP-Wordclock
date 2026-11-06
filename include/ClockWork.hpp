@@ -3,6 +3,7 @@
 #include "I2CBus.h"
 #include "NeoMultiFeature.hpp"
 #include "OpenWeatherMap.h"
+#include "PowerLimitedLedStrip.h"
 #include "SensitiveData.h"
 #include "Transitions/Transition.h"
 #include "WordClockState.h"
@@ -310,6 +311,14 @@ void ClockWork::initLedStrip(uint8_t num) {
         activeLedStrip = new RgbLedStripAdapter<NeoEsp32Rmt0Ws2812xMethod>(
             ledCount, G.hardwarePins.led);
     }
+#endif
+
+#if POWER_LIMIT_MILLIAMPS > 0
+    // Wraps the strip before anything is drawn, so the boot animations are
+    // limited as well.
+    activeLedStrip = new PowerLimitedLedStrip(
+        activeLedStrip, ledCount, POWER_LIMIT_MILLIAMPS,
+        POWER_LIMIT_MILLIAMPS_PER_CHANNEL);
 #endif
 }
 

@@ -25,6 +25,17 @@
 #define SCL_PIN_ESP8266 D1
 
 //--------------------------------------------------------------------------
+// Power limit
+//--------------------------------------------------------------------------
+// Upper bound for the LED strip current in mA, 0 disables the limit. Each
+// frame's current is estimated from its colour values; a frame above the limit
+// is dimmed as a whole, colours keep their ratios. Leave headroom for the
+// controller, e.g. 4000 on a 5 A supply.
+#define POWER_LIMIT_MILLIAMPS 0
+// Current of one LED channel (R, G, B or W) at full brightness, in mA.
+#define POWER_LIMIT_MILLIAMPS_PER_CHANNEL 20
+
+//--------------------------------------------------------------------------
 // Front panel layout
 //--------------------------------------------------------------------------
 /**********************/
