@@ -133,6 +133,7 @@ let TRANSLATION_RU = {
 			"de-10-11": "🇩🇪 10 × 11",
 			"de-10-11-alt": "🇩🇪 10 × 11 Альтернатива",
 			"de-10-11-clock": "🇩🇪 10 × 11 Часы",
+			"de-10-11-clt3": "🇩🇪 10 × 11 CLT3 (Leuchtbildshop)",
 			"de-10-11-nero": "🇩🇪 10 × 11 Nero",
 			"de-10-11-mrrioes": "🇩🇪 10 × 11 mrrioes",
 			"de-10-11-bayerisch": "🇩🇪 10 × 11 Баварский",
