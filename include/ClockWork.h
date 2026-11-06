@@ -25,6 +25,8 @@ private:
     void requestHardwareButtonDisplayRefresh();
     uint32_t num32BitWithOnesAccordingToColumns();
     void reallocateSecondsFrame();
+    bool renderImageOverlay();
+    void endImageOverlay();
 
     //------------------------------------------------------------------------------
     // Front Effect Functions

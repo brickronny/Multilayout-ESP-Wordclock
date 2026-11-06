@@ -6,6 +6,8 @@
 
 #include "Mqtt.h"
 
+#include "Config.h"
+#include "ImageOverlay.h"
 #include "Led.h"
 #include "WebPageAdapter.h"
 #include <ArduinoJson.h>
@@ -28,6 +30,7 @@ void write();
 
 extern Led led;
 extern WiFiClient client;
+extern ClockType *usedClockType;
 
 #define HOMEASSISTANT_DISCOVERY_TOPIC "homeassistant"
 
@@ -570,6 +573,10 @@ None
 void Mqtt::init() {
     mqttClient.setServer(G.mqtt.serverAdress, G.mqtt.port);
     mqttClient.setCallback(callback);
+#if IMAGE_MAX_FRAMES > 0
+    // Pictures and animations arrive in one message (image/set).
+    mqttClient.setBufferSize(IMAGE_MAX_BYTES + 256);
+#endif
 
     // Configure LWT (Last Will and Testament)
     String availabilityTopic = topic("availability");
@@ -616,6 +623,10 @@ void Mqtt::init() {
     mqttClient.subscribe(topic("scrolltext/set").c_str());
     mqttClient.subscribe(topic("effect_speed/set").c_str());
     mqttClient.subscribe(topic("auto_brightness/set").c_str());
+#if IMAGE_MAX_FRAMES > 0
+    mqttClient.subscribe(topic("image/set").c_str());
+    mqttClient.subscribe(topic("image/clear").c_str());
+#endif
 
     // Transition settings
     mqttClient.subscribe(topic("transition_type/set").c_str());
@@ -623,6 +634,10 @@ void Mqtt::init() {
     mqttClient.subscribe(topic("transition_duration/set").c_str());
 
     Serial.println("MQTT Connected");
+#if IMAGE_MAX_FRAMES > 0
+    publishImageInfo();
+    publishImageState();
+#endif
     sendDiscovery(); // Re-announce entities so they self-heal after a
                      // broker restart or purge of retained config
     sendState();     // Send initial state
@@ -797,6 +812,22 @@ static void applyTransitionSelect(const char *id, const char *msg,
 void Mqtt::callback(char *receivedTopic, byte *payload, unsigned int length) {
     // Determine message type before parsing; not every topic uses JSON.
     String topicStr = String(receivedTopic);
+
+#if IMAGE_MAX_FRAMES > 0
+    // Pictures may be far larger than every other message; handled before
+    // the fixed-size copy below.
+    if (topicStr == topic("image/set")) {
+        processImage(payload, length);
+        return;
+    }
+    if (topicStr == topic("image/clear")) {
+        if (imageOverlay) {
+            // Ends at the next update, so ClockWork hands the display back.
+            imageOverlay->stop();
+        }
+        return;
+    }
+#endif
 
     // Copy into a fixed buffer so hostile or malformed MQTT payloads cannot
     // allocate arbitrarily large stack frames.
@@ -1177,3 +1208,119 @@ void Mqtt::publishDiscoveryConfigs() {
     // Make the device available now that its entities are announced.
     mqttClient.publish(topic("availability").c_str(), "online", true);
 }
+
+//------------------------------------------------------------------------------
+// Pictures and animations (image/set, image/clear, image/info, image/state)
+//------------------------------------------------------------------------------
+
+#if IMAGE_MAX_FRAMES > 0
+
+/*
+ * image/set payload:
+ *   {"frames": [{"pixels": "RRGGBB...", "ms": 200}, ...],
+ *    "loops": 0, "duration": 0, "brightness": 80}
+ * pixels: six hex digits per LED, letters row by row from the top left,
+ * optionally followed by the minute LEDs 1..4. loops 0 = endless, duration in
+ * seconds 0 = no limit, brightness in percent (default: the clock's current
+ * brightness).
+ */
+void Mqtt::processImage(const byte *payload, unsigned int length) {
+    if (length > IMAGE_MAX_BYTES) {
+        publishImageResult("message too large");
+        return;
+    }
+
+    const uint16_t cells =
+        usedClockType->rowsWordMatrix() * usedClockType->colsWordMatrix();
+    const uint8_t extras = usedClockType->hasMinuteLeds() ? 4 : 0;
+    if (imageOverlay == nullptr || imageOverlay->cells() != cells ||
+        imageOverlay->pixels() != cells + extras) {
+        delete imageOverlay;
+        imageOverlay = new ImageOverlay(cells, extras, IMAGE_MAX_FRAMES);
+    }
+
+    DynamicJsonDocument doc(length + 2048);
+    if (deserializeJson(doc, reinterpret_cast<const char *>(payload), length)) {
+        publishImageResult("invalid JSON");
+        return;
+    }
+
+    JsonArrayConst frames = doc["frames"].as<JsonArrayConst>();
+    uint8_t brightness;
+    if (doc.containsKey("brightness")) {
+        brightness = static_cast<uint8_t>(
+            constrain(doc["brightness"].as<int>(), 0, 100) * 255 / 100);
+    } else {
+        brightness = static_cast<uint8_t>(
+            led.getColorbyPositionWithAppliedBrightness(Foreground).B * 255.f);
+    }
+
+    image::Result result = imageOverlay->begin(
+        frames.isNull() ? 0 : min<size_t>(frames.size(), 255), doc["loops"] | 0,
+        doc["duration"] | 0, brightness);
+    if (result == image::Result::Ok && frames.size() > IMAGE_MAX_FRAMES) {
+        result = image::Result::TooManyFrames;
+    }
+    uint8_t index = 0;
+    for (JsonObjectConst frame : frames) {
+        if (result != image::Result::Ok) {
+            break;
+        }
+        result = imageOverlay->setFrame(index++, frame["pixels"] | "",
+                                        frame["ms"] | 0);
+    }
+    if (result == image::Result::Ok) {
+        result = imageOverlay->commit(millis());
+    }
+
+    if (result != image::Result::Ok) {
+        publishImageResult(image::resultText(result));
+        return;
+    }
+    publishImageResult(nullptr);
+    if (mqttInstance) {
+        mqttInstance->publishImageState();
+    }
+}
+
+//------------------------------------------------------------------------------
+
+void Mqtt::publishImageResult(const char *error) {
+    StaticJsonDocument<160> doc;
+    doc["accepted"] = error == nullptr;
+    if (error) {
+        doc["error"] = error;
+    }
+    char buffer[160];
+    serializeJson(doc, buffer);
+    mqttClient.publish(topic("image/result").c_str(), buffer, false);
+}
+
+//------------------------------------------------------------------------------
+
+/* Retained, so an editor knows the limits before it sends anything. */
+void Mqtt::publishImageInfo() {
+    StaticJsonDocument<200> doc;
+    doc["rows"] = usedClockType->rowsWordMatrix();
+    doc["cols"] = usedClockType->colsWordMatrix();
+    doc["minute_leds"] = usedClockType->hasMinuteLeds() ? 4 : 0;
+    doc["max_bytes"] = IMAGE_MAX_BYTES;
+    doc["max_frames"] = IMAGE_MAX_FRAMES;
+    char buffer[200];
+    serializeJson(doc, buffer);
+    mqttClient.publish(topic("image/info").c_str(), buffer, true);
+}
+
+//------------------------------------------------------------------------------
+
+void Mqtt::publishImageState() {
+    const bool showing = imageOverlay && imageOverlay->active();
+    mqttClient.publish(topic("image/state").c_str(), showing ? "ON" : "OFF",
+                       true);
+}
+
+#else
+
+void Mqtt::publishImageState() {}
+
+#endif

@@ -322,6 +322,10 @@ extern uint8_t lastMinute;
 extern uint32_t frontMatrix[MAX_ROW_SIZE];
 extern uint32_t lastFrontMatrix[MAX_ROW_SIZE];
 
+/* Picture or animation sent over MQTT, shown on top of the current mode. */
+class ImageOverlay;
+extern ImageOverlay *imageOverlay;
+
 /*
  * Which word lit each cell, as a FrontWord cast to uint8_t. Filled by
  * ClockType::setFrontMatrixPixel() while a word is being drawn, so consumers

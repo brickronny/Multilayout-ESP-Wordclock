@@ -17,6 +17,9 @@ private:
     static bool processColor(const JsonDocument &doc);
     static bool processBrightness(const JsonDocument &doc);
     static bool checkIfMqttUserIsEmpty();
+    static void processImage(const byte *payload, unsigned int length);
+    static void publishImageResult(const char *error);
+    void publishImageInfo();
     static const char *getEffectName();
 
 public:
@@ -27,6 +30,7 @@ public:
     void loop();
     void sendState();
     void sendDiscovery();
+    void publishImageState();
 
     bool isConnected();
     const char *status();
