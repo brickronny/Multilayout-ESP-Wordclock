@@ -1,6 +1,7 @@
 #include "ClockWork.h"
 #include "Font.h"
 #include "I2CBus.h"
+#include "ImageOverlay.h"
 #include "NeoMultiFeature.hpp"
 #include "OpenWeatherMap.h"
 #include "SensitiveData.h"
@@ -1494,6 +1495,60 @@ void ClockWork::calcClockface() {
 
 //------------------------------------------------------------------------------
 
+bool ClockWork::renderImageOverlay() {
+    if (imageOverlay == nullptr || !imageOverlay->active()) {
+        return false;
+    }
+
+    bool changed = false;
+    const RgbColor *frame = imageOverlay->update(millis(), changed);
+    if (frame == nullptr) {
+        endImageOverlay();
+        return false;
+    }
+    if (!changed) {
+        return true;
+    }
+
+    const uint8_t rows = usedClockType->rowsWordMatrix();
+    const uint8_t cols = usedClockType->colsWordMatrix();
+    for (uint8_t row = 0; row < rows; row++) {
+        for (uint8_t col = 0; col < cols; col++) {
+            led.setPixel(mirroredRow(row, rows), mirroredCol(col, cols),
+                         HsbColor(frame[row * cols + col]));
+        }
+    }
+    if (usedClockType->hasMinuteLeds() &&
+        imageOverlay->pixels() > imageOverlay->cells()) {
+        uint16_t minutePixels[4] = {0};
+        usedClockType->getMinuteArray(minutePixels,
+                                      G.minuteVariant == MinuteVariant::LED7x
+                                          ? MinuteVariant::LED7x
+                                          : MinuteVariant::LED4x);
+        for (uint8_t i = 0; i < 4; i++) {
+            led.setPixel(minutePixels[i],
+                         HsbColor(frame[imageOverlay->cells() + i]));
+        }
+    }
+    led.clearFrame();
+    led.show();
+    return true;
+}
+
+//------------------------------------------------------------------------------
+
+/* Hand the display back: the current mode redraws from scratch. */
+void ClockWork::endImageOverlay() {
+    memset(lastFrontMatrix, 0, sizeof(lastFrontMatrix));
+    G.progInit = true;
+    parametersChanged = true;
+    if (mqttInstance) {
+        mqttInstance->publishImageState();
+    }
+}
+
+//------------------------------------------------------------------------------
+
 void ClockWork::clearClockByProgInit() {
     if (G.progInit) {
         G.progInit = false;
@@ -1945,6 +2000,11 @@ void ClockWork::loop(struct tm &tm) {
     G.conf = COMMAND_IDLE;
 
     broadcastWebState();
+
+    // A picture or animation from image/set owns the display until it ends.
+    if (renderImageOverlay()) {
+        return;
+    }
 
     switch (G.prog) {
 

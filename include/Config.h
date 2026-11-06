@@ -25,6 +25,20 @@
 #define SCL_PIN_ESP8266 D1
 
 //--------------------------------------------------------------------------
+// Pictures and animations over MQTT (topic <prefix>/image/set)
+//--------------------------------------------------------------------------
+// Largest accepted message in bytes and most frames per animation. The MQTT
+// receive buffer grows to IMAGE_MAX_BYTES, so keep it small on an ESP8266.
+// IMAGE_MAX_FRAMES 0 disables the feature.
+#ifdef ESP8266
+#define IMAGE_MAX_BYTES 4096
+#define IMAGE_MAX_FRAMES 4
+#else
+#define IMAGE_MAX_BYTES 24576
+#define IMAGE_MAX_FRAMES 32
+#endif
+
+//--------------------------------------------------------------------------
 // Front panel layout
 //--------------------------------------------------------------------------
 /**********************/
