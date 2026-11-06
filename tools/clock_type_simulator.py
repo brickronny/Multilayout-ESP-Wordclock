@@ -80,6 +80,9 @@ class ClockType:
     layout: list[str]
     actions: dict[str, list[Action]] = field(default_factory=dict)
     capabilities: dict[str, bool] = field(default_factory=dict)
+    parent: str | None = None
+    own_capabilities: dict[str, bool] = field(default_factory=dict)
+    own_size: bool = False
 
     def has(self, capability: str) -> bool:
         if capability == "hasMinuteCorners":
@@ -285,11 +288,12 @@ def parse_clock_type(path: Path) -> ClockType | None:
         return None
 
     text = path.read_text(encoding="utf-8")
-    class_match = re.search(r"class\s+(\w+)_t\s*:\s*public\s+ClockType", text)
+    class_match = re.search(r"class\s+(\w+)_t\s*:\s*public\s+(\w+)", text)
     if not class_match:
         return None
 
     class_stem = class_match.group(1)
+    parent = class_match.group(2)
     rows_match = re.search(
         r"rowsWordMatrix\(\)\s*(?:override\s*)?\{\s*return\s+(\d+)\s*;", text
     )
@@ -301,13 +305,15 @@ def parse_clock_type(path: Path) -> ClockType | None:
     rows = int(rows_match.group(1)) if rows_match else 10
     cols = int(cols_match.group(1)) if cols_match else 11
     capabilities = DEFAULT_CAPABILITIES.copy()
+    own_capabilities = {}
     for cap, value in re.findall(
         r"(?:const\s+)?bool\s+(has\w+)\(\)\s*(?:override\s*)?\{\s*return\s+(true|false)\s*;",
         text,
     ):
-        capabilities[cap] = value == "true"
+        own_capabilities[cap] = value == "true"
+    capabilities.update(own_capabilities)
 
-    return ClockType(
+    clock_type = ClockType(
         name=path.stem.replace(".", ""),
         class_name=f"{class_stem}_t",
         path=path,
@@ -318,11 +324,48 @@ def parse_clock_type(path: Path) -> ClockType | None:
         actions=parse_actions(text),
         capabilities=capabilities,
     )
+    # Layouts may derive from another layout (e.g. a different wiring of the
+    # same front); load_clock_types() fills in what they inherit.
+    clock_type.parent = None if parent == "ClockType" else parent
+    clock_type.own_capabilities = own_capabilities
+    clock_type.own_size = bool(rows_match or cols_match)
+    return clock_type
+
+
+def inherit_from_parents(clock_types: list[ClockType]) -> list[ClockType]:
+    by_class = {clock_type.class_name: clock_type for clock_type in clock_types}
+
+    def resolve(clock_type: ClockType, seen: tuple[str, ...] = ()) -> ClockType | None:
+        if clock_type.parent is None:
+            return clock_type
+        base = by_class.get(clock_type.parent)
+        if base is None or clock_type.class_name in seen:
+            return None
+        base = resolve(base, seen + (clock_type.class_name,))
+        if base is None:
+            return None
+        if not clock_type.own_size:
+            clock_type.rows, clock_type.cols = base.rows, base.cols
+        own_layout = parse_layout(
+            clock_type.path.read_text(encoding="utf-8"),
+            clock_type.rows,
+            clock_type.cols,
+        )
+        clock_type.layout = own_layout if own_layout else base.layout
+        clock_type.actions = {**base.actions, **clock_type.actions}
+        clock_type.capabilities = {**base.capabilities, **clock_type.own_capabilities}
+        if clock_type.lang == "?":
+            clock_type.lang = base.lang
+        clock_type.parent = None
+        return clock_type
+
+    return [u for clock_type in clock_types if (u := resolve(clock_type))]
 
 
 def load_clock_types() -> list[ClockType]:
+    parsed = [u for path in CLOCK_TYPES_DIR.glob("*.hpp") if (u := parse_clock_type(path))]
     return sorted(
-        (u for path in CLOCK_TYPES_DIR.glob("*.hpp") if (u := parse_clock_type(path))),
+        inherit_from_parents(parsed),
         key=lambda clock_type: clock_type.name.lower(),
     )
 
