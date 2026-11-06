@@ -26,7 +26,11 @@ private:
     uint32_t num32BitWithOnesAccordingToColumns();
     void reallocateSecondsFrame();
     bool renderImageOverlay();
-    void endImageOverlay();
+    bool renderTimerOverlay();
+    void drawOverlayFrame(const RgbColor *frame, uint16_t cells,
+                          uint16_t pixels, float brightness);
+    void handDisplayBack();
+    bool timerShown = false;
 
     //------------------------------------------------------------------------------
     // Front Effect Functions

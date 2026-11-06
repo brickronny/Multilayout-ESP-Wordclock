@@ -9,6 +9,7 @@
 #include "Config.h"
 #include "ImageOverlay.h"
 #include "Led.h"
+#include "TimerOverlay.h"
 #include "WebPageAdapter.h"
 #include <ArduinoJson.h>
 #include <PubSubClient.h>
@@ -627,6 +628,8 @@ void Mqtt::init() {
     mqttClient.subscribe(topic("image/set").c_str());
     mqttClient.subscribe(topic("image/clear").c_str());
 #endif
+    mqttClient.subscribe(topic("timer/set").c_str());
+    mqttClient.subscribe(topic("timer/clear").c_str());
 
     // Transition settings
     mqttClient.subscribe(topic("transition_type/set").c_str());
@@ -638,6 +641,7 @@ void Mqtt::init() {
     publishImageInfo();
     publishImageState();
 #endif
+    publishTimerState();
     sendDiscovery(); // Re-announce entities so they self-heal after a
                      // broker restart or purge of retained config
     sendState();     // Send initial state
@@ -840,6 +844,15 @@ void Mqtt::callback(char *receivedTopic, byte *payload, unsigned int length) {
     char msg[MQTT_MAX_PAYLOAD_LENGTH];
     memcpy(msg, payload, length);
     msg[length] = '\0';
+
+    if (topicStr == topic("timer/set")) {
+        processTimer(msg);
+        return;
+    }
+    if (topicStr == topic("timer/clear")) {
+        timerOverlay.stop(); // ClockWork hands the display back
+        return;
+    }
 
     // Home Assistant's birth message: re-announce discovery and state so the
     // device repopulates after an HA restart, even if retained config was lost.
@@ -1324,3 +1337,67 @@ void Mqtt::publishImageState() {
 void Mqtt::publishImageState() {}
 
 #endif
+
+//------------------------------------------------------------------------------
+// Timer (timer/set, timer/clear, timer/state)
+//------------------------------------------------------------------------------
+
+/*
+ * timer/set payload:
+ *   {"seconds": 300, "variant": "A"|"B", "alarm": 30}   start (or restart)
+ *   {"add": 60}                       add or (negative) take away seconds;
+ *                                     starts the timer when none is running
+ * Up to 99:59. alarm: seconds of red blinking at zero, default 30.
+ * Needs a 10 x 11 front.
+ */
+void Mqtt::processTimer(const char *msg) {
+    StaticJsonDocument<256> doc;
+    const char *error = nullptr;
+    if (deserializeJson(doc, msg)) {
+        error = "invalid JSON";
+    } else if (usedClockType->rowsWordMatrix() != timer::ROWS ||
+               usedClockType->colsWordMatrix() != timer::COLS) {
+        error = "the timer needs a 10 x 11 front";
+    } else if (doc.containsKey("add")) {
+        if (timerOverlay.add(doc["add"].as<long>(), millis()) !=
+            timer::Error::None) {
+            error = "nothing to add to";
+        }
+    } else {
+        const char *variant = doc["variant"] | "B";
+        const timer::Variant v = (variant[0] == 'A' || variant[0] == 'a')
+                                     ? timer::Variant::A
+                                     : timer::Variant::B;
+        if (timerOverlay.start(doc["seconds"] | 0UL, v, doc["alarm"] | 30,
+                               millis()) != timer::Error::None) {
+            error = "seconds must be 1..5999";
+        }
+    }
+
+    StaticJsonDocument<128> result;
+    result["accepted"] = error == nullptr;
+    if (error) {
+        result["error"] = error;
+    }
+    char buffer[128];
+    serializeJson(result, buffer);
+    mqttClient.publish(topic("timer/result").c_str(), buffer, false);
+    if (!error && mqttInstance) {
+        mqttInstance->publishTimerState();
+    }
+}
+
+//------------------------------------------------------------------------------
+
+/* Retained; while running updated every second. */
+void Mqtt::publishTimerState() {
+    static const char *const names[] = {"idle", "running", "alarm"};
+    StaticJsonDocument<160> doc;
+    doc["state"] = names[static_cast<uint8_t>(timerOverlay.state())];
+    doc["remaining"] = timerOverlay.remaining(millis());
+    doc["total"] = timerOverlay.total();
+    doc["variant"] = timerOverlay.variant() == timer::Variant::A ? "A" : "B";
+    char buffer[160];
+    serializeJson(doc, buffer);
+    mqttClient.publish(topic("timer/state").c_str(), buffer, true);
+}
