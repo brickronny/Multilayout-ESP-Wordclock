@@ -26,6 +26,7 @@ private:
     uint32_t num32BitWithOnesAccordingToColumns();
     void reallocateSecondsFrame();
     bool renderImageOverlay();
+    bool renderTextOverlay();
     bool renderTimerOverlay();
     void drawOverlayFrame(const RgbColor *frame, uint16_t cells,
                           uint16_t pixels, float brightness);

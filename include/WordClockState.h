@@ -328,6 +328,9 @@ extern ImageOverlay *imageOverlay;
 /* Countdown started over MQTT (timer/set). */
 class TimerOverlay;
 extern TimerOverlay timerOverlay;
+/* Message sent over MQTT (text/set), scrolls through and ends. */
+class TextOverlay;
+extern TextOverlay textOverlay;
 
 /*
  * Which word lit each cell, as a FrontWord cast to uint8_t. Filled by

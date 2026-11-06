@@ -9,6 +9,7 @@
 #include "Config.h"
 #include "ImageOverlay.h"
 #include "Led.h"
+#include "TextOverlay.h"
 #include "TimerOverlay.h"
 #include "WebPageAdapter.h"
 #include <ArduinoJson.h>
@@ -66,6 +67,9 @@ static void broadcastToWeb(const char *command, const char *key, T value) {
 // Keep inbound payloads bounded; PubSubClient's default buffer is smaller, but
 // discovery raises it and callbacks should still avoid variable-length stacks.
 static constexpr unsigned int MQTT_MAX_PAYLOAD_LENGTH = 512;
+// A text/set message: TEXT_MAX_CHARS glyphs, up to two UTF-8 bytes each for
+// the umlauts, JSON escapes and the other keys.
+static constexpr unsigned int TEXT_MAX_BYTES = TEXT_MAX_CHARS * 4 + 256;
 
 static constexpr int32_t MQTT_CONNECT_TIMEOUT_MS = 2000;
 
@@ -576,7 +580,10 @@ void Mqtt::init() {
     mqttClient.setCallback(callback);
 #if IMAGE_MAX_FRAMES > 0
     // Pictures and animations arrive in one message (image/set).
-    mqttClient.setBufferSize(IMAGE_MAX_BYTES + 256);
+    mqttClient.setBufferSize(
+        max<unsigned int>(IMAGE_MAX_BYTES, TEXT_MAX_BYTES) + 256);
+#else
+    mqttClient.setBufferSize(TEXT_MAX_BYTES + 256);
 #endif
 
     // Configure LWT (Last Will and Testament)
@@ -630,6 +637,8 @@ void Mqtt::init() {
 #endif
     mqttClient.subscribe(topic("timer/set").c_str());
     mqttClient.subscribe(topic("timer/clear").c_str());
+    mqttClient.subscribe(topic("text/set").c_str());
+    mqttClient.subscribe(topic("text/clear").c_str());
 
     // Transition settings
     mqttClient.subscribe(topic("transition_type/set").c_str());
@@ -642,6 +651,7 @@ void Mqtt::init() {
     publishImageState();
 #endif
     publishTimerState();
+    publishTextState();
     sendDiscovery(); // Re-announce entities so they self-heal after a
                      // broker restart or purge of retained config
     sendState();     // Send initial state
@@ -832,6 +842,16 @@ void Mqtt::callback(char *receivedTopic, byte *payload, unsigned int length) {
         return;
     }
 #endif
+
+    // Messages may be longer than the fixed-size copy below allows.
+    if (topicStr == topic("text/set")) {
+        processText(payload, length);
+        return;
+    }
+    if (topicStr == topic("text/clear")) {
+        textOverlay.stop(); // ClockWork hands the display back
+        return;
+    }
 
     // Copy into a fixed buffer so hostile or malformed MQTT payloads cannot
     // allocate arbitrarily large stack frames.
@@ -1159,6 +1179,17 @@ void Mqtt::publishDiscoveryConfigs() {
     publishJsonStream(discoveryTopic("notify", discoveryNode + "_message"),
                       doc);
 
+    // Notify entity for a one-off message: scrolls through once over
+    // text/set and returns to the clock, the mode stays as it is.
+    beginDiscovery(doc, unique_id);
+    doc["uniq_id"] = unique_id + "_message_once";
+    doc["name"] = "Message (once)";
+    doc["ic"] = "mdi:message-arrow-right";
+    doc["cmd_t"] = base + "/text/set";
+    doc["cmd_tpl"] = "{\"text\": {{ value | to_json }}}";
+    publishJsonStream(discoveryTopic("notify", discoveryNode + "_message_once"),
+                      doc);
+
     // Number entity for animation/effect speed.
     beginDiscovery(doc, unique_id);
     doc["uniq_id"] = unique_id + "_effect_speed";
@@ -1291,8 +1322,14 @@ void Mqtt::processImage(const byte *payload, unsigned int length) {
         return;
     }
     publishImageResult(nullptr);
+    // The newest message wins: a picture replaces a scrolling text.
+    const bool replacedText = textOverlay.active();
+    textOverlay.clear();
     if (mqttInstance) {
         mqttInstance->publishImageState();
+        if (replacedText) {
+            mqttInstance->publishTextState();
+        }
     }
 }
 
@@ -1400,4 +1437,100 @@ void Mqtt::publishTimerState() {
     char buffer[160];
     serializeJson(doc, buffer);
     mqttClient.publish(topic("timer/state").c_str(), buffer, true);
+}
+
+//------------------------------------------------------------------------------
+// Messages (text/set, text/clear, text/state, text/result)
+//------------------------------------------------------------------------------
+
+/*
+ * text/set payload:
+ *   {"text": "Alles Gute!", "color": "FF0000", "ms": 100, "loops": 1,
+ *    "duration": 0, "brightness": 80}
+ * Only text is required. UTF-8, up to TEXT_MAX_CHARS characters. color
+ * RRGGBB (default: the clock's foreground colour), ms per column (default:
+ * the effect speed), loops passes (default 1, 0 = endless), duration in
+ * seconds (0 = no limit), brightness in percent (default: the clock's).
+ * A newer picture or message replaces it; a running timer shows again after.
+ */
+void Mqtt::processText(const byte *payload, unsigned int length) {
+    const char *error = nullptr;
+    DynamicJsonDocument doc(length + 512);
+    if (length > TEXT_MAX_BYTES) {
+        error = "message too large";
+    } else if (deserializeJson(doc, reinterpret_cast<const char *>(payload),
+                               length)) {
+        error = "invalid JSON";
+    }
+
+    if (error == nullptr) {
+        HsbColor colour = G.color[Foreground];
+        colour.B = 1.f;
+        const char *hex = doc["color"] | "";
+        if (*hex == '#') {
+            hex++;
+        }
+        RgbColor rgb = colour;
+        if (*hex != '\0' && !image::parseHexPixels(hex, 1, &rgb)) {
+            error = "color must be RRGGBB";
+        }
+
+        float brightness;
+        if (doc.containsKey("brightness")) {
+            brightness = constrain(doc["brightness"].as<int>(), 0, 100) / 100.f;
+        } else {
+            brightness =
+                led.getColorbyPositionWithAppliedBrightness(Foreground).B;
+        }
+        rgb = RgbColor(static_cast<uint8_t>(rgb.R * brightness + .5f),
+                       static_cast<uint8_t>(rgb.G * brightness + .5f),
+                       static_cast<uint8_t>(rgb.B * brightness + .5f));
+
+        if (error == nullptr) {
+            const text::Error e = textOverlay.start(
+                doc["text"] | "", usedClockType->rowsWordMatrix(),
+                usedClockType->colsWordMatrix(), rgb,
+                doc["ms"] | effectSpeedIntervalMillis(G.effectSpeed),
+                doc["loops"] | 1, doc["duration"] | 0, millis());
+            if (e != text::Error::None) {
+                error = text::errorText(e);
+            }
+        }
+    }
+
+    StaticJsonDocument<128> result;
+    result["accepted"] = error == nullptr;
+    if (error) {
+        result["error"] = error;
+    }
+    char buffer[128];
+    serializeJson(result, buffer);
+    mqttClient.publish(topic("text/result").c_str(), buffer, false);
+    if (error) {
+        return;
+    }
+
+    // The newest message wins: a scrolling text replaces a picture.
+#if IMAGE_MAX_FRAMES > 0
+    const bool replacedImage = imageOverlay && imageOverlay->active();
+    if (imageOverlay) {
+        imageOverlay->clear();
+    }
+#else
+    const bool replacedImage = false;
+#endif
+    if (mqttInstance) {
+        mqttInstance->publishTextState();
+        if (replacedImage) {
+            mqttInstance->publishImageState();
+        }
+    }
+}
+
+//------------------------------------------------------------------------------
+
+/* Retained: ON while a message is shown. */
+void Mqtt::publishTextState() {
+    mqttClient.publish(topic("text/state").c_str(),
+                       textOverlay.active() ? "ON" : "OFF", true);
 }
