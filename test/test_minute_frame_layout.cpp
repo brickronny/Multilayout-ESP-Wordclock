@@ -120,31 +120,53 @@ void minuteLedsAndFrameDoNotOverlap() {
                 uint16_t minutePixel[4] = {0};
                 layout->getMinuteArray(minutePixel, variant);
 
-                snprintf(message, sizeof(message),
-                         "%s/%s/%u wired: minute LEDs run in strip order",
-                         LAYOUT_NAMES[i], variantName(variant),
-                         G.minuteLedCount);
-                check(minutePixel[0] <= minutePixel[1] &&
-                          minutePixel[1] <= minutePixel[2] &&
-                          minutePixel[2] <= minutePixel[3],
-                      message);
+                // Minute LEDs may sit anywhere on the strip (Ger10x11Clt3
+                // splices them into the letter chain, Ger22x11Weather uses
+                // letter cells). Led::clearMinArray() wipes the four minute
+                // LEDs plus the gaps of a contiguous LED7x block. What must
+                // hold: a frame LED is never wiped, and the gaps never hit a
+                // letter.
+                bool wiped[1024] = {false};
+                bool gapPixel[1024] = {false};
+                for (uint8_t m = 0; m < 4; m++) {
+                    wiped[minutePixel[m]] = true;
+                    if (m < 3 && minutePixel[m + 1] > minutePixel[m] &&
+                        minutePixel[m + 1] - minutePixel[m] <= 2) {
+                        for (uint16_t gap = minutePixel[m] + 1;
+                             gap < minutePixel[m + 1]; gap++) {
+                            wiped[gap] = true;
+                            gapPixel[gap] = true;
+                        }
+                    }
+                }
 
-                // The span Led::clearMinArray() wipes, not just the four lit
-                // LEDs.
-                const uint16_t firstMinute = minutePixel[0];
-                const uint16_t lastMinute = minutePixel[3];
+                const uint8_t ledsPerLetter = getLedsPerLetter(G.buildTypeDef);
+                for (uint8_t row = 0; row < layout->rowsWordMatrix(); row++) {
+                    for (uint8_t col = 0; col < layout->colsWordMatrix();
+                         col++) {
+                        const uint16_t first =
+                            layout->getFrontMatrixIndex(row, col) *
+                            ledsPerLetter;
+                        for (uint8_t l = 0; l < ledsPerLetter; l++) {
+                            snprintf(message, sizeof(message),
+                                     "%s/%s/%u wired: letter %u/%u (pixel "
+                                     "%u) is clear of the minute LED gaps",
+                                     LAYOUT_NAMES[i], variantName(variant),
+                                     G.minuteLedCount, row, col, first + l);
+                            check(!gapPixel[first + l], message);
+                        }
+                    }
+                }
 
                 for (uint16_t f = 0; f < layout->numPixelsFrameMatrix(); f++) {
                     const uint16_t framePixel = layout->getFrameMatrixIndex(f);
 
                     snprintf(message, sizeof(message),
                              "%s/%s/%u wired: frame LED %u (pixel %u) is "
-                             "clear of the minute LEDs %u..%u",
+                             "clear of the minute LEDs",
                              LAYOUT_NAMES[i], variantName(variant),
-                             G.minuteLedCount, f, framePixel, firstMinute,
-                             lastMinute);
-                    check(framePixel < firstMinute || framePixel > lastMinute,
-                          message);
+                             G.minuteLedCount, f, framePixel);
+                    check(!wiped[framePixel], message);
                 }
             }
         }

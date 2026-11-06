@@ -580,8 +580,20 @@ void Led::clearRow(uint8_t row) {
 
 void Led::clearMinArray() {
     if (usedClockType->hasMinuteLeds()) {
-        for (uint16_t i = minutePixelArray[0]; i <= minutePixelArray[3]; i++) {
-            clearPixel(i);
+        // Clear the four minute LEDs themselves, not the span between the
+        // first and the last one: layouts that splice the corner LEDs into
+        // the letter chain (e.g. Ger10x11Clt3) would lose letters otherwise.
+        // Gaps of a contiguous block (the unlit LEDs of LED7x) are still
+        // cleared, as before.
+        for (uint8_t i = 0; i < 4; i++) {
+            clearPixel(minutePixelArray[i]);
+            if (i < 3 && minutePixelArray[i + 1] > minutePixelArray[i] &&
+                minutePixelArray[i + 1] - minutePixelArray[i] <= 2) {
+                for (uint16_t gap = minutePixelArray[i] + 1;
+                     gap < minutePixelArray[i + 1]; gap++) {
+                    clearPixel(gap);
+                }
+            }
         }
     }
     minuteArray = 0;
