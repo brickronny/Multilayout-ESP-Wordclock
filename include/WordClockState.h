@@ -324,6 +324,9 @@ extern uint32_t lastFrontMatrix[MAX_ROW_SIZE];
 /* Picture or animation sent over MQTT, shown on top of the current mode. */
 class ImageOverlay;
 extern ImageOverlay *imageOverlay;
+/* Countdown started over MQTT (timer/set). */
+class TimerOverlay;
+extern TimerOverlay timerOverlay;
 
 /*
  * Which word lit each cell, as a FrontWord cast to uint8_t. Filled by

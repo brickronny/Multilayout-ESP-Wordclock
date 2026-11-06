@@ -5,6 +5,7 @@
 #include "NeoMultiFeature.hpp"
 #include "OpenWeatherMap.h"
 #include "SensitiveData.h"
+#include "TimerOverlay.h"
 #include "Transitions/Transition.h"
 #include "WordClockState.h"
 #include "WordClockTypes/ClockType.hpp"
@@ -1503,48 +1504,96 @@ bool ClockWork::renderImageOverlay() {
     bool changed = false;
     const RgbColor *frame = imageOverlay->update(millis(), changed);
     if (frame == nullptr) {
-        endImageOverlay();
+        handDisplayBack();
+        if (mqttInstance) {
+            mqttInstance->publishImageState();
+        }
         return false;
     }
-    if (!changed) {
-        return true;
+    if (changed) {
+        // Brightness was applied when the image was loaded.
+        drawOverlayFrame(frame, imageOverlay->cells(), imageOverlay->pixels(),
+                         1.f);
     }
+    return true;
+}
 
+//------------------------------------------------------------------------------
+
+bool ClockWork::renderTimerOverlay() {
+    static RgbColor frame[timer::PIXELS];
+
+    bool changed = false;
+    const timer::State state = timerOverlay.update(millis(), frame, changed);
+    if (state == timer::State::Idle) {
+        if (timerShown) {
+            timerShown = false;
+            handDisplayBack();
+            if (mqttInstance) {
+                mqttInstance->publishTimerState();
+            }
+        }
+        return false;
+    }
+    if (!timerShown) {
+        timerShown = true;
+        changed = true;
+    }
+    if (changed) {
+        drawOverlayFrame(
+            frame, timer::CELLS, timer::PIXELS,
+            led.getColorbyPositionWithAppliedBrightness(Foreground).B);
+        if (mqttInstance) {
+            mqttInstance->publishTimerState();
+        }
+    }
+    return true;
+}
+
+//------------------------------------------------------------------------------
+
+/*
+ * frame: the letters row by row from the top left, then (pixels > cells) the
+ * minute LEDs 1..4. Goes through Led::setPixel, so mirroring, RGBW conversion
+ * and the power limit apply.
+ */
+void ClockWork::drawOverlayFrame(const RgbColor *frame, uint16_t cells,
+                                 uint16_t pixels, float brightness) {
     const uint8_t rows = usedClockType->rowsWordMatrix();
     const uint8_t cols = usedClockType->colsWordMatrix();
     for (uint8_t row = 0; row < rows; row++) {
         for (uint8_t col = 0; col < cols; col++) {
-            led.setPixel(mirroredRow(row, rows), mirroredCol(col, cols),
-                         HsbColor(frame[row * cols + col]));
+            const uint16_t i = row * cols + col;
+            HsbColor color = i < cells ? HsbColor(frame[i]) : HsbColor();
+            color.B *= brightness;
+            led.setPixel(mirroredRow(row, rows), mirroredCol(col, cols), color);
         }
     }
-    if (usedClockType->hasMinuteLeds() &&
-        imageOverlay->pixels() > imageOverlay->cells()) {
+    if (usedClockType->hasMinuteLeds()) {
         uint16_t minutePixels[4] = {0};
         usedClockType->getMinuteArray(minutePixels,
                                       G.minuteVariant == MinuteVariant::LED7x
                                           ? MinuteVariant::LED7x
                                           : MinuteVariant::LED4x);
         for (uint8_t i = 0; i < 4; i++) {
-            led.setPixel(minutePixels[i],
-                         HsbColor(frame[imageOverlay->cells() + i]));
+            HsbColor color =
+                pixels > cells ? HsbColor(frame[cells + i]) : HsbColor();
+            color.B *= brightness;
+            led.setPixel(minutePixels[i], color);
         }
     }
     led.clearFrame();
     led.show();
-    return true;
 }
 
 //------------------------------------------------------------------------------
 
-/* Hand the display back: the current mode redraws from scratch. */
-void ClockWork::endImageOverlay() {
+/* An overlay ended: the current mode redraws from scratch. */
+void ClockWork::handDisplayBack() {
     memset(lastFrontMatrix, 0, sizeof(lastFrontMatrix));
     G.progInit = true;
     parametersChanged = true;
-    if (mqttInstance) {
-        mqttInstance->publishImageState();
-    }
+    timerOverlay.invalidate(); // a running timer comes back at once
 }
 
 //------------------------------------------------------------------------------
@@ -2002,7 +2051,7 @@ void ClockWork::loop(struct tm &tm) {
     broadcastWebState();
 
     // A picture or animation from image/set owns the display until it ends.
-    if (renderImageOverlay()) {
+    if (renderImageOverlay() || renderTimerOverlay()) {
         return;
     }
 
